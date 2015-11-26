@@ -30,7 +30,6 @@
   <ItemGroup />
   <ItemGroup>
     <Compile Include="Invoke-ScriptAnalyzer.ps1" />
-    <Compile Include="TfsArtifactDownloader.tests.ps1" />
     <Compile Include="_TestSetup.ps1" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />

@@ -4,24 +4,37 @@
 
 $Script:credential = $null
 
-function Get-TfsBuildLatest
+function Get-TfsBuild
 {
 	# Enable -Verbose option
 	[CmdletBinding()]
 
 	Param(
 		[Parameter(Mandatory=$true)]
-		[string]$collectionURL,
+		[string]$collection,
 
 		[Parameter(Mandatory=$true)]
-		[string]$projectName,
+		[string]$project,
 
 		[Parameter(Mandatory=$true)]
-		[string]$buildDefinitionID
+		[string]$buildDefinitionID,
+
+		[Parameter(Mandatory=$false)]
+		[string]$buildResult = "Latest",
+
+		[Parameter(Mandatory=$true)]
+		[System.Management.Automation.PSCredential]
+		$credential
 	)
 
 	# Gets latest build
-	$uri = "$collectionURL/$projectName" + '/_apis/build/builds?definitions=' + $buildDefinitionID + '&$top=1&api-version=2.0'
+	$uri = "$collection/$project" + '/_apis/build/builds?$top=1&api-version=2.0&definitions=' + $buildDefinitionID
+
+	if($buildResult -ne "Latest")
+	{
+		$uri += "&resultFilter=$buildResult"
+	}
+
 	$builds = Invoke-RestMethod -Uri $uri -Credential $credential
 
 	if($builds.count -eq 0)
@@ -57,29 +70,32 @@ function Get-TfsBuildLatest
 #}
 
 
-#function Connect-TfsTeamProject {
+function Connect-TfsTeamProject {
 
-#	[CmdletBinding()]
+	[CmdletBinding()]
 
-#	Param
-#	(
-#		[Parameter(Mandatory=$true)]
-#		$collection,
+	Param
+	(
+		[Parameter(Mandatory=$true)]
+		[ValidateNotNull()]
+		$collection,
 
-#		[Parameter(Mandatory=$false)]
-#		$project,
+		[Parameter(Mandatory=$true)]
+		[ValidateNotNull()]
+		$project,
 
-#		[Parameter(Mandatory=$true)]
-#		[System.Management.Automation.PSCredential]
-#		$credential
-#	)
+		[Parameter(Mandatory=$true)]
+		[System.Management.Automation.PSCredential]
+		$credential
+	)
 
-#	$Script:credential = $credential
-#	$Script:collection = $collection
-#	$Script:project = $project
-#}
+	$Script:credential = $credential
+	$Script:collection = $collection
+	$Script:project = $project
+	$Script:projectURL = "$collection/$project"
+}
 
-function Invoke-TfsArtifactDownload {
+function Invoke-TfsArtifactDownloader {
 
 	# Enable -Verbose option
 	[CmdletBinding()]
@@ -91,71 +107,90 @@ function Invoke-TfsArtifactDownload {
 
 		[Parameter(Mandatory=$true)]
 		[ValidateNotNull()]
-		[string]$projectName,
+		[string]$project,
 
 		[Parameter(Mandatory=$true)]
 		[ValidateNotNull()]
   		[string]$buildDefinitionID,
 	
+		[ValidateSet("Latest", "Succeeded")] 
+        [String] 
+        $buildResult = "Latest",
+
+		[Parameter()]
+		[string[]]$artifactsToProcess = @(""),
+
+		[Parameter(Mandatory=$false)]
+		[string]$branch = "master",
+
 		[string]$directoryName = "",
 
 		[Parameter(Mandatory=$true)]
 		[System.Management.Automation.PSCredential]
 		$credential
 	)
-
-	try
-	{
-		$Script:credential = $credential
-
-		# Get build
-		$build = Get-TfsBuildLatest -collectionURL $collection -projectName $projectName -buildDefinitionID $buildDefinitionID
-
-		$buildUri = $build.Url
-		$buildNumber = $build.BuildNumber
-		$buildDefinitionName = $build.Definition.Name
-		$buildArtifactsUrl = "$buildUri/artifacts"
-
-		if(!$directoryName)
+	
+	process{
+		try
 		{
-			$directoryName = "$PSScriptRoot\$($buildDefinitionName)_$buildNumber"
-		}
+			Connect-TfsTeamProject -collection $collection -project $project -credential $credential
 
-		# Delete drop folder
-		If (Test-Path $directoryName){
-			Write-Output " - Clearing drop folder..."
-			Remove-Item "$directoryName/*" -Recurse
-			Write-Output "Completed" -ForegroundColor Green
-		}
+			# Get build
+			$build = Get-TfsBuild -collection $collection -project $project -buildDefinitionID $buildDefinitionID -buildResult $buildResult -credential $credential
+
+			$buildUri = $build.Url
+			$buildNumber = $build.BuildNumber
+			$buildDefinitionName = $build.Definition.Name
+			$buildArtifactsUrl = "$buildUri/artifacts"
 				
-		$artifacts = Invoke-RestMethod -Uri $buildArtifactsUrl -Credential $credential
+			Write-Output "Downloading TFS artifacts for $buildDefinitionName ($buildNumber)"
 
-		foreach($artifact in $artifacts.Value)  {
+			# Set default destination directory
+			if(!$directoryName)
+			{
+				$directoryName = "$($MyInvocation.PSScriptRoot)\$($buildDefinitionName)_$buildNumber"
+			}
 
-			$artifactDownloadURL = $artifact.Resource.downloadUrl
-			$artifactName = $artifact.Name
-			$artifactTempFile = "$env:TEMP\artifacttemp.zip"
+			# Check if destination directory exists
+			If (Test-Path $directoryName){
+				Remove-Item "$directoryName/*" -Recurse
+				Write-Output " - Removed artifacts"
+			}
 
-			# Download artifact
-			Write-Output " - Downloading '$artifactName'..."
-			Invoke-WebRequest -uri $artifactDownloadURL -Credential $credential -OutFile $artifactTempFile
-			Write-Output "Completed" -ForegroundColor Green
+			$build | ConvertTo-Json | Out-File "$directoryName\buildinfo.json"
+			
+			# Get artifacts
+			$artifacts = Invoke-RestMethod -Uri $buildArtifactsUrl -Credential $credential
+
+			# Loop each artifact
+			foreach($artifact in $artifacts.Value)  {
+
+				$artifactDownloadURL = $artifact.Resource.downloadUrl
+				$artifactName = $artifact.Name
+				$artifactTempFile = "$env:TEMP\artifacttemp.zip"
+
+				# Download artifact
+				Invoke-WebRequest -uri $artifactDownloadURL -Credential $credential -OutFile $artifactTempFile
+			#	Write-Output "Completed"
 		
-			# Unzip artifact
-			#  Write-Progress -CurrentOperation ("Sleep {0}s" -f ($start_sleep)) ( " {0}s ..." -f ($i*$sleep_iteration) )
-			Write-Output " - Unzipping '$artifactName'..."
-			[io.compression.zipfile]::ExtractToDirectory($artifactTempFile, $directoryName)
-			Write-Output "Completed" -ForegroundColor Green	
+				# Unzip artifact
+			#	Write-Output " - Unzipping '$artifactName'..."
+				[io.compression.zipfile]::ExtractToDirectory($artifactTempFile, $directoryName)
+				Write-Output " - Downloaded artifact '$artifactName'..."
+			}
+	
+			#Write-Output "Operation is completed!"
 		}
-
-		Write-Output "Operation is completed!"
+		catch
+		{
+			Write-Output "Exception: " $_.Exception.Message
+		}
+		finally
+		{
+			#Write-Output "Completed"
+		}
 	}
-	catch
-	{
-		Write-Output "Exception: " $_.Exception.Message
-	}
-	finally
-	{
-		Write-Output "Completed"
+	end{
+		#Write-Output "Done"
 	}
 }

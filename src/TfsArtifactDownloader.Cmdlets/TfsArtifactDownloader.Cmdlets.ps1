@@ -97,7 +97,7 @@ function Invoke-TfsArtifactDownload {
 		[ValidateNotNull()]
   		[string]$buildDefinitionID,
 	
-		[string]$directoryName,
+		[string]$directoryName = "",
 
 		[Parameter(Mandatory=$true)]
 		[System.Management.Automation.PSCredential]
@@ -123,13 +123,11 @@ function Invoke-TfsArtifactDownload {
 
 		# Delete drop folder
 		If (Test-Path $directoryName){
-			Write-Host " - Clearing drop folder..." -NoNewline
+			Write-Output " - Clearing drop folder..."
 			Remove-Item "$directoryName/*" -Recurse
-			Write-Host "Completed" -ForegroundColor Green
+			Write-Output "Completed" -ForegroundColor Green
 		}
 				
-		Add-Type -assembly 'system.io.compression.filesystem'
-
 		$artifacts = Invoke-RestMethod -Uri $buildArtifactsUrl -Credential $credential
 
 		foreach($artifact in $artifacts.Value)  {
@@ -139,24 +137,25 @@ function Invoke-TfsArtifactDownload {
 			$artifactTempFile = "$env:TEMP\artifacttemp.zip"
 
 			# Download artifact
-			Write-Host " - Downloading '$artifactName'..." -NoNewline
+			Write-Output " - Downloading '$artifactName'..."
 			Invoke-WebRequest -uri $artifactDownloadURL -Credential $credential -OutFile $artifactTempFile
-			Write-Host "Completed" -ForegroundColor Green
+			Write-Output "Completed" -ForegroundColor Green
 		
 			# Unzip artifact
-			Write-Host " - Unzipping '$artifactName'..." -NoNewline
+			#  Write-Progress -CurrentOperation ("Sleep {0}s" -f ($start_sleep)) ( " {0}s ..." -f ($i*$sleep_iteration) )
+			Write-Output " - Unzipping '$artifactName'..."
 			[io.compression.zipfile]::ExtractToDirectory($artifactTempFile, $directoryName)
-			Write-Host "Completed" -ForegroundColor Green	
+			Write-Output "Completed" -ForegroundColor Green	
 		}
 
-		Write-Host "Operation is completed!"
+		Write-Output "Operation is completed!"
 	}
 	catch
 	{
-		Write-Host "Exception: " $_.Exception.Message
+		Write-Output "Exception: " $_.Exception.Message
 	}
 	finally
 	{
-		Write-Host "Completed"
+		Write-Output "Completed"
 	}
 }

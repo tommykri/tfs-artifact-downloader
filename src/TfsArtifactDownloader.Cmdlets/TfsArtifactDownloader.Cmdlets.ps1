@@ -20,7 +20,7 @@ function Get-TfsBuild
 		[string]$buildDefinitionID,
 
 		[Parameter(Mandatory=$false)]
-		[string]$buildResult = "Latest",
+		[string]$buildFilter = "Latest",
 
 		[Parameter(Mandatory=$true)]
 		[System.Management.Automation.PSCredential]
@@ -30,9 +30,9 @@ function Get-TfsBuild
 	# Gets latest build
 	$uri = "$collection/$project" + '/_apis/build/builds?$top=1&api-version=2.0&definitions=' + $buildDefinitionID
 
-	if($buildResult -ne "Latest")
+	if($buildFilter -ne "Latest")
 	{
-		$uri += "&resultFilter=$buildResult"
+		$uri += "&resultFilter=$buildFilter"
 	}
 
 	$builds = Invoke-RestMethod -Uri $uri -Credential $credential
@@ -115,13 +115,19 @@ function Invoke-TfsArtifactDownloader {
 	
 		[ValidateSet("Latest", "Succeeded")] 
         [String] 
-        $buildResult = "Latest",
+        $buildFilter = "Latest",
 
 		[Parameter()]
 		[string[]]$artifactsToProcess = @(""),
 
 		[Parameter(Mandatory=$false)]
 		[string]$branch = "master",
+
+		[Parameter(Mandatory=$false)]
+		[bool]$keepBuildForever = $false,
+
+		[Parameter()]
+		[string[]]$addBuildTags = @(""),
 
 		[string]$directoryName = "",
 
@@ -136,7 +142,13 @@ function Invoke-TfsArtifactDownloader {
 			Connect-TfsTeamProject -collection $collection -project $project -credential $credential
 
 			# Get build
-			$build = Get-TfsBuild -collection $collection -project $project -buildDefinitionID $buildDefinitionID -buildResult $buildResult -credential $credential
+			$build = Get-TfsBuild -collection $collection -project $project -buildDefinitionID $buildDefinitionID -buildFilter $buildFilter -credential $credential
+			
+			if(!$build)
+			{
+				Write-Error "Could not find a valid build from the build definition"
+				return
+			}
 
 			$buildUri = $build.Url
 			$buildNumber = $build.BuildNumber
@@ -155,6 +167,10 @@ function Invoke-TfsArtifactDownloader {
 			If (Test-Path $directoryName){
 				Remove-Item "$directoryName/*" -Recurse
 				Write-Output " - Removed artifacts"
+			}
+			else
+			{
+				md $directoryName
 			}
 
 			$build | ConvertTo-Json | Out-File "$directoryName\buildinfo.json"
@@ -180,10 +196,28 @@ function Invoke-TfsArtifactDownloader {
 			}
 	
 			#Write-Output "Operation is completed!"
+
+			# Update build
+			if($keepBuildForever)
+			{
+				$body = '{ keepForever: "true"}'
+				$BuildReqBodyJson =  $body | ConvertTo-Json
+				$buildOutput = Invoke-RestMethod -Method Patch -Uri ($buildUri + "?api-version=2.0") -Credential $credential -ContentType 'application/json' -Body $body
+			}
+
+			# Add tags
+			foreach($tag in $addBuildTags)
+			{
+				$buildOutput = Invoke-RestMethod -Method Put -Uri ($buildUri + "/tags/" + $tag + "?api-version=2.0") -Credential $credential -ContentType 'application/json'
+			}
+
+		#	$body = '{ value: ["Deployed", "Released"] }'
+		#	$BuildReqBodyJson = $body | ConvertTo-Json
+
 		}
 		catch
 		{
-			Write-Output "Exception: " $_.Exception.Message
+			Write-Error $_.Exception.Message
 		}
 		finally
 		{
